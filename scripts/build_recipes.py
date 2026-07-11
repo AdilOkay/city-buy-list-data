@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+"""
+build_recipes.py - City Buy List craft dataset (static game data)
+
+Emits docs/data/recipes.json: for every gear key in baseline.json, the exact
+crafting materials + counts, pulled from the canonical ao-bin-dumps item data
+(the game client's own craftingrequirements). Never a guessed count.
+
+Keys mirror baseline.json exactly, including enchant variants:
+  "T4_2H_ARCANESTAFF"      -> base recipe
+  "T4_2H_ARCANESTAFF@1..4" -> the enchantment-level recipe (enchanted materials)
+
+Value = list of [material_uniquename, count], or null when the item has no
+craftable recipe (vanity / arena banners) so the app shows "no recipe", never
+a fabricated one.
+
+Source: https://github.com/ao-data/ao-bin-dumps (items.json). Rebuild only on a
+game patch; prices live in build_materials.py, not here.
+
+Usage:
+  python scripts/build_recipes.py
+  python scripts/build_recipes.py --dump path/to/items.json   # use a local dump
+"""
+import argparse, json, sys, time, urllib.request
+from pathlib import Path
+
+AOBIN_URL = "https://raw.githubusercontent.com/ao-data/ao-bin-dumps/master/items.json"
+GEAR_BUCKETS = ("weapon", "equipmentitem", "transformationweapon")
+ROOT = Path(__file__).resolve().parent.parent
+BASELINE = ROOT / "docs" / "data" / "baseline.json"
+OUT = ROOT / "docs" / "data" / "recipes.json"
+
+
+def load_dump(dump_path):
+    if dump_path:
+        print(f"reading local dump {dump_path}")
+        return json.loads(Path(dump_path).read_text(encoding="utf-8"))
+    print(f"downloading {AOBIN_URL} ...")
+    with urllib.request.urlopen(AOBIN_URL, timeout=180) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+
+def index_gear(dump):
+    """uniquename -> item element, across the gear buckets."""
+    idx = {}
+    items = dump["items"]
+    for bucket in GEAR_BUCKETS:
+        for e in items.get(bucket, []):
+            if isinstance(e, dict) and "@uniquename" in e:
+                idx[e["@uniquename"]] = e
+    return idx
+
+
+def craft_resources(node):
+    """Normalise a craftingrequirements block into [[uniquename, count], ...]."""
+    if not isinstance(node, dict):
+        return None
+    cr = node.get("craftingrequirements")
+    if isinstance(cr, list):            # a few items carry multiple recipe blocks
+        cr = cr[0] if cr else None      # first block = the standard resource recipe
+    if not isinstance(cr, dict):
+        return None
+    res = cr.get("craftresource")
+    if res is None:
+        return None
+    res = res if isinstance(res, list) else [res]
+    out = []
+    for x in res:
+        if isinstance(x, dict) and "@uniquename" in x and "@count" in x:
+            # market/AODP id: enchanted resources trade as "<uniquename>@<level>"
+            # (e.g. T4_METALBAR_LEVEL1@1); base resources and artefacts stay bare.
+            mid = x["@uniquename"]
+            lvl = int(x.get("@enchantmentlevel", 0) or 0)
+            if lvl > 0:
+                mid = f"{mid}@{lvl}"
+            out.append([mid, int(x["@count"])])
+    return out or None
+
+
+def recipe_for(idx, base, ench):
+    e = idx.get(base)
+    if e is None:
+        return "missing"                # base item not in the dump at all
+    if ench == 0:
+        return craft_resources(e)
+    enc = (e.get("enchantments") or {}).get("enchantment")
+    enc = enc if isinstance(enc, list) else ([enc] if enc else [])
+    for x in enc:
+        if isinstance(x, dict) and int(x.get("@enchantmentlevel", -1)) == ench:
+            return craft_resources(x)
+    return None                         # enchant level not present
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dump", help="path to a local ao-bin-dumps items.json")
+    args = ap.parse_args()
+
+    baseline = json.loads(BASELINE.read_text(encoding="utf-8"))["items"]
+    idx = index_gear(load_dump(args.dump))
+
+    recipes, no_recipe, missing = {}, [], []
+    for key, v in baseline.items():
+        base = key.split("@")[0]
+        r = recipe_for(idx, base, v.get("ench", 0))
+        if r == "missing":
+            missing.append(key)
+            recipes[key] = None
+        elif r is None:
+            no_recipe.append(key)
+            recipes[key] = None
+        else:
+            recipes[key] = r
+
+    payload = {
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "source": AOBIN_URL,
+        "notes": {
+            "scope": "recipe = crafting materials for every baseline.json gear key",
+            "keys": "mirror baseline.json exactly; '@N' = enchantment level N (enchanted materials)",
+            "value": "[[material_uniquename, count], ...] or null when the item has no craft recipe",
+            "null": "vanity / arena-banner items have no recipe; never fabricated",
+            "pricing": "materials are priced separately by build_materials.py (materials.json)",
+        },
+        "items": recipes,
+    }
+    OUT.write_text(json.dumps(payload, separators=(",", ":"), ensure_ascii=False), encoding="utf-8")
+
+    total = len(baseline)
+    resolved = sum(1 for x in recipes.values() if x)
+    print(f"\nwrote {OUT}  ({OUT.stat().st_size/1024:.0f} KB)")
+    print(f"resolved {resolved}/{total} recipes | no-recipe {len(no_recipe)} | base-missing {len(missing)}")
+    if missing:
+        print(" base-missing sample:", missing[:10])
+    if no_recipe:
+        print(" no-recipe sample   :", no_recipe[:10])
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,52 @@
+name: Refresh price data
+
+# Public data feed for City Buy List. Rebuilds docs/data/baseline.json,
+# materials.json and toptraded.json from the public AODP API twice a day and
+# commits them here, so the launcher can pull fresh averages at each start.
+# recipes.json / craftmeta.json / items.json mirror the game's own item data
+# and only change on a game patch - they are NOT on this schedule.
+
+on:
+  schedule:
+    - cron: "0 3 * * *"    # 03:00 UTC
+    - cron: "0 15 * * *"   # 15:00 UTC
+  workflow_dispatch: {}
+
+concurrency:
+  group: refresh-data
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build baseline.json (Black Market prices + 7/30d averages)
+        run: python scripts/build_baseline.py
+
+      - name: Build materials.json (per-city material prices)
+        run: python scripts/build_materials.py
+
+      - name: Build toptraded.json (per-city volume)
+        run: python scripts/build_toptraded.py
+
+      - name: Commit refreshed data if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/data/baseline.json docs/data/materials.json docs/data/toptraded.json
+          if git diff --cached --quiet; then
+            echo "no data changes, nothing to commit"
+          else
+            git commit -m "chore: scheduled price data refresh"
+            git push
+          fi
