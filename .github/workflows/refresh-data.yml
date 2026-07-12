@@ -1,10 +1,11 @@
 name: Refresh price data
 
 # Public data feed for City Buy List. Rebuilds docs/data/baseline.json,
-# materials.json and toptraded.json from the public AODP API twice a day and
-# commits them here, so the launcher can pull fresh averages at each start.
-# recipes.json / craftmeta.json / items.json mirror the game's own item data
-# and only change on a game patch - they are NOT on this schedule.
+# materials.json, toptraded.json and routes.json from the public AODP API twice
+# a day and commits them here, so the launcher can pull fresh averages at each
+# start. recipes.json / craftmeta.json / items.json / routesmeta.json mirror the
+# game's own item data and only change on a game patch - they are NOT on this
+# schedule.
 
 on:
   schedule:
@@ -39,11 +40,14 @@ jobs:
       - name: Build toptraded.json (per-city volume)
         run: python scripts/build_toptraded.py
 
+      - name: Build routes.json (per-city standing orders for the Routes tab)
+        run: python scripts/build_routes.py
+
       - name: Commit refreshed data if changed
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add docs/data/baseline.json docs/data/materials.json docs/data/toptraded.json
+          git add docs/data/baseline.json docs/data/materials.json docs/data/toptraded.json docs/data/routes.json
           if git diff --cached --quiet; then
             echo "no data changes, nothing to commit"
           else

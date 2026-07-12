@@ -4,13 +4,15 @@ build_toptraded.py - City Buy List per-city Top Traded dataset
 
 baseline.json only carries Black Market volume, so the Top Traded tab could rank
 by the Black Market alone. This emits docs/data/toptraded.json: per-city daily
-volume + average price for every T4-T8 gear item, so the tab can also rank the
-most-traded gear in each royal city / Caerleon / Brecilien (like AFM's Locations
-filter), on a 7d or 30d window.
+volume + average price for the whole routesmeta.json universe (T4-T8 gear plus
+resources / craft materials / consumables / mounts), so the Top Traded tab can
+rank the most-traded gear per city AND the Routes tab gets its per-city volume
+and 7/30d average sell basis, on a 7d or 30d window.
 
 Source: AODP history endpoint (same public data + server as baseline). Rebuild
 alongside baseline (2x/day). Aggregated across qualities per (item, city); an
 entry is written only when the item actually traded in that city (never a guess).
+Falls back to the baseline gear set when routesmeta.json is absent.
 
 Output shape:
   { "cities": [...], "items": {
@@ -29,6 +31,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 BASELINE = ROOT / "docs" / "data" / "baseline.json"
+ROUTESMETA = ROOT / "docs" / "data" / "routesmeta.json"
 OUT = ROOT / "docs" / "data" / "toptraded.json"
 CITIES = ["Bridgewatch", "Fort Sterling", "Lymhurst", "Martlock", "Thetford", "Caerleon", "Brecilien"]
 QUALITIES = "1,2,3,4,5"
@@ -37,8 +40,11 @@ SLEEP = 2.0
 UA = "city-buy-list-pro/1.0 (top-traded dataset builder)"
 
 
-def gear_ids():
-    return sorted(json.loads(BASELINE.read_text(encoding="utf-8"))["items"].keys())
+def universe_ids():
+    ids = set(json.loads(BASELINE.read_text(encoding="utf-8"))["items"].keys())
+    if ROUTESMETA.exists():
+        ids |= set(json.loads(ROUTESMETA.read_text(encoding="utf-8"))["ids"])
+    return sorted(ids)
 
 
 def get_json(url, tries=10):
@@ -77,8 +83,8 @@ def main():
     ap.add_argument("--server", default="europe", choices=["europe", "west", "east"])
     args = ap.parse_args()
 
-    ids = gear_ids()
-    print(f"{len(ids)} gear ids from baseline.json -> AODP {args.server} history (7 cities x q1-5)", flush=True)
+    ids = universe_ids()
+    print(f"{len(ids)} ids (baseline + routesmeta universe) -> AODP {args.server} history (7 cities x q1-5)", flush=True)
 
     # (item, city) -> aggregation accumulators across qualities, for the 7d and 30d windows
     acc = {}   # id -> city -> {"c7":cnt, "pv7":sum, "c30":cnt, "pv30":sum}
@@ -131,8 +137,8 @@ def main():
         "cities": CITIES,
         "notes": {
             "value": "items[id][city] = {v7,a7,v30,a30}: v = mean items/day over the window, a = volume-weighted avg price. Aggregated across qualities. Missing = did not trade there.",
-            "scope": "T4-T8 gear (same set as baseline.json). Black Market volume stays in baseline.json.",
-            "rank": "app ranks by daily silver = v * a; joins name/tier/category from baseline.json",
+            "scope": "routesmeta.json universe (gear + resources + materials + consumables + mounts); Black Market volume stays in baseline.json.",
+            "rank": "app ranks by daily silver = v * a; joins metadata from baseline.json (gear) or routesmeta.json (rest); Routes joins v/a as its volume + avg sell basis",
         },
         "items": items,
     }
