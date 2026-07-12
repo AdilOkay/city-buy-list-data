@@ -86,8 +86,15 @@ def main():
     ids = universe_ids()
     print(f"{len(ids)} ids (baseline + routesmeta universe) -> AODP {args.server} history (7 cities x q1-5)", flush=True)
 
-    # (item, city) -> aggregation accumulators across qualities, for the 7d and 30d windows
-    acc = {}   # id -> city -> {"c7":cnt, "pv7":sum, "c30":cnt, "pv30":sum}
+    # (item, city) -> aggregation accumulators across qualities, for the 1d, 7d and 30d
+    # windows. v1 counts the LAST FULL UTC DAY only (the running day is partial and would
+    # undercount), mirroring the in-game Market History "24 hours" figure.
+    # Verified 2026-07-13: AODP's DAILY aggregation lags several days on most items (a
+    # 50-sales/day item's last daily point can be a week old); only ~15% of entries have
+    # yesterday's point at build time. v1 is therefore often absent even for active items:
+    # absent = "not aggregated yet", NOT "zero sold". The app shows '?' in that case.
+    yday = time.strftime("%Y-%m-%d", time.gmtime(time.time() - 86400))
+    acc = {}   # id -> city -> {"c1":cnt, "c7":cnt, "pv7":sum, "c30":cnt, "pv30":sum}
     for i in range(0, len(ids), CHUNK):
         chunk = ids[i:i + CHUNK]
         try:
@@ -100,11 +107,13 @@ def main():
             if not series:
                 continue
             mid, city = row["item_id"], row["location"]
-            a = acc.setdefault(mid, {}).setdefault(city, {"c7": 0, "pv7": 0, "c30": 0, "pv30": 0})
+            a = acc.setdefault(mid, {}).setdefault(city, {"c1": 0, "c7": 0, "pv7": 0, "c30": 0, "pv30": 0})
             for p in series[-30:]:
                 cnt = p.get("item_count", 0)
                 a["c30"] += cnt
                 a["pv30"] += p.get("avg_price", 0) * cnt
+                if (p.get("timestamp") or "")[:10] == yday:
+                    a["c1"] += cnt
             for p in series[-7:]:
                 cnt = p.get("item_count", 0)
                 a["c7"] += cnt
@@ -119,6 +128,8 @@ def main():
             if not (a["c7"] or a["c30"]):
                 continue
             rec = {}
+            if a["c1"]:
+                rec["v1"] = a["c1"]
             if a["c7"]:
                 rec["v7"] = round(a["c7"] / 7, 2)
                 rec["a7"] = round(a["pv7"] / a["c7"])
@@ -136,7 +147,7 @@ def main():
         "server": args.server,
         "cities": CITIES,
         "notes": {
-            "value": "items[id][city] = {v7,a7,v30,a30}: v = mean items/day over the window, a = volume-weighted avg price. Aggregated across qualities. Missing = did not trade there.",
+            "value": "items[id][city] = {v1,v7,a7,v30,a30}: v7/v30 = mean items/day over the window, v1 = items sold during the LAST FULL UTC DAY (like the in-game 24h figure; absent = AODP's daily aggregation has not caught up, NOT zero - it lags days on most items), a = volume-weighted avg price. Aggregated across qualities. Missing = did not trade there.",
             "scope": "routesmeta.json universe (gear + resources + materials + consumables + mounts); Black Market volume stays in baseline.json.",
             "rank": "app ranks by daily silver = v * a; joins metadata from baseline.json (gear) or routesmeta.json (rest); Routes joins v/a as its volume + avg sell basis",
         },
