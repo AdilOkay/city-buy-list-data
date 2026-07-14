@@ -7,10 +7,12 @@ name: Refresh price data
 # game's own item data and only change on a game patch - they are NOT on this
 # schedule.
 
+# NOTE: the scheduled refresh is DISABLED. AODP throttles GitHub Actions' datacenter
+# IPs, so every scheduled run crawled under 429 backoff and was killed at the 45-min
+# timeout before it could commit (data stayed frozen). The refresh now runs on the
+# owner's machine (unthrottled home IP) via refresh-data.bat + a Task Scheduler entry,
+# which pushes fresh data here. This manual trigger is kept only as an emergency fallback.
 on:
-  schedule:
-    - cron: "0 3 * * *"    # 03:00 UTC
-    - cron: "0 15 * * *"   # 15:00 UTC
   workflow_dispatch: {}
 
 concurrency:
