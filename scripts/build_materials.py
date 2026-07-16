@@ -27,6 +27,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 RECIPES = ROOT / "docs" / "data" / "recipes.json"
+CRAFTMETA = ROOT / "docs" / "data" / "craftmeta.json"
 OUT = ROOT / "docs" / "data" / "materials.json"
 CITIES = ["Bridgewatch", "Fort Sterling", "Lymhurst", "Martlock", "Thetford", "Caerleon", "Brecilien"]
 CHUNK = 50
@@ -41,7 +42,34 @@ def materials_from_recipes():
         if r:
             for uniquename, _count in r:
                 mats.add(uniquename)
-    return sorted(mats)
+    return mats
+
+
+def upgrade_materials():
+    """Enchantment materials, read from craftmeta's ur (itself dump-derived).
+
+    These are NOT in any recipe: crafting an enchanted item eats enchanted BARS, while
+    ENCHANTING an existing one eats runes/souls/relics, which live in the dump's separate
+    <upgraderequirements>. recipes.json never carried that path, so materials_from_recipes()
+    has always missed them and the app could not price an enchant upgrade at all.
+
+    Derived, not hard-coded, so a game patch that adds a material is picked up on the next
+    craftmeta rebuild. Expect 21 ids as of 2026-07-16 (T4-T8 x rune/soul/relic, plus the
+    consumable enchanters T1_ALCHEMY_EXTRACT/FISHSAUCE LEVEL1-3). Notably absent, and it is
+    a fact rather than a hole: no avalonian shard - x.3 to x.4 has no upgrade path.
+
+    A stale craftmeta would silently drop these ids and the upgrade flips would quietly go
+    n/a, so an empty result is loud rather than silent."""
+    try:
+        items = json.loads(CRAFTMETA.read_text(encoding="utf-8"))["items"]
+    except Exception as e:
+        print(f"  WARNING: craftmeta.json unreadable ({e}) - enchant materials will NOT be priced")
+        return set()
+    mats = {v["ur"][0] for v in items.values() if v and v.get("ur") and v["ur"][0]}
+    if not mats:
+        print("  WARNING: craftmeta.json has no 'ur' field - rebuild it (build_craftmeta.py) "
+              "or enchant upgrades stay unpriced")
+    return mats
 
 
 def get_json(url, tries=6):
@@ -84,8 +112,10 @@ def main():
     ap.add_argument("--server", default="europe", choices=["europe", "west", "east"])
     args = ap.parse_args()
 
-    mats = materials_from_recipes()
-    print(f"{len(mats)} distinct materials from recipes.json -> AODP {args.server}")
+    craft_mats, up_mats = materials_from_recipes(), upgrade_materials()
+    mats = sorted(craft_mats | up_mats)
+    print(f"{len(mats)} distinct materials -> AODP {args.server} "
+          f"({len(craft_mats)} from recipes + {len(up_mats - craft_mats)} enchant materials)")
 
     # --- pass 1: direct buy-side price (cheapest live sell order) per city ---
     rows = {m: {} for m in mats}       # uniquename -> {city: sell_price_min>0}
