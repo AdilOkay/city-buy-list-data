@@ -97,7 +97,8 @@ def main():
     args = ap.parse_args()
 
     baseline = json.loads(BASELINE.read_text(encoding="utf-8"))["items"]
-    idx = index_gear(load_dump(args.dump))
+    dump = load_dump(args.dump)
+    idx = index_gear(dump)
 
     recipes, no_recipe, missing = {}, [], []
     for key, v in baseline.items():
@@ -111,6 +112,29 @@ def main():
             recipes[key] = None
         else:
             recipes[key] = r
+
+    # transformationweapon = the shapeshifter weapons (Lightcaller, Bloodmoon, Stillgaze, ...).
+    # Craftable gear sold at the Black Market, but never seeded into the frozen baseline universe,
+    # so they were invisible to the planner. Enumerate the bucket (T4-T8) and add their keys here;
+    # build_baseline then resolves metadata + Black Market prices from the same buckets. Standard
+    # artefact-weapon model: refined resources + the SHAPESHIFTER artefact + a rare tracking mat.
+    added = 0
+    for e in dump["items"].get("transformationweapon", []):
+        if not (isinstance(e, dict) and e.get("@uniquename") and e.get("@shopcategory")):
+            continue
+        base = e["@uniquename"]
+        if len(base) < 2 or not base[1].isdigit() or not (4 <= int(base[1]) <= 8):
+            continue
+        for ench in range(0, 5):                      # base + each enchant level that has a recipe
+            k = base if ench == 0 else f"{base}@{ench}"
+            if k in recipes:                          # never override an existing entry
+                continue
+            r = recipe_for(idx, base, ench)
+            if isinstance(r, list) and r:
+                recipes[k] = r
+                added += 1
+    if added:
+        print(f"transformationweapon (shapeshifter): +{added} recipe keys added to the universe")
 
     payload = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
